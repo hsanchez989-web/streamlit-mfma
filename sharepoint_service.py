@@ -13,7 +13,7 @@ import logging
 import pandas as pd
 from office365.runtime.auth.client_credential import ClientCredential
 from office365.sharepoint.client_context import ClientContext
-from office365.sharepoint.listitems.caml.caml_query import CamlQuery
+from office365.sharepoint.listitems.camlquery import CamlQuery
 
 
 logger = logging.getLogger(__name__)
