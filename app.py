@@ -7,16 +7,6 @@ import streamlit as st
 from fpdf import FPDF
 from dotenv import load_dotenv
 
-from sharepoint_service import (
-    SharePointConfig,
-    fetch_mfmea_rows,
-    save_record,
-    user_project_access,
-)
-
-
-load_dotenv()
-
 NAVY = "#001f54"
 MID_GREY = "#d9d9d9"
 BLACK = "#000000"
@@ -42,34 +32,54 @@ st.markdown(
 )
 
 
-cfg = SharePointConfig.from_env()
+load_dotenv()
+
+SAMPLE_ENTRIES: List[Dict[str, Any]] = [
+    {
+        "Machine": "Hydraulic Press",
+        "Project": "Alpha",
+        "Customer": "Contoso",
+        "Analyst": "admin@example.com",
+        "Function": "Clamp workpiece",
+        "FailureMode": "Insufficient clamping force",
+        "FailureEffect": "Workpiece slips",
+        "Cause": "Hydraulic leak",
+        "Severity": 9,
+        "Occurrence": 5,
+        "Detection": 4,
+        "Prevention": "Regular seal replacement",
+        "DetectionControls": "Pressure monitoring",
+        "RPNGoal": 180,
+    },
+    {
+        "Machine": "Conveyor System",
+        "Project": "Beta",
+        "Customer": "Fabrikam",
+        "Analyst": "maintainer@example.com",
+        "Function": "Move material",
+        "FailureMode": "Belt misalignment",
+        "FailureEffect": "Material spill",
+        "Cause": "Uneven load",
+        "Severity": 6,
+        "Occurrence": 4,
+        "Detection": 6,
+        "Prevention": "Alignment checks",
+        "DetectionControls": "Belt tracking sensors",
+        "RPNGoal": 180,
+    },
+]
 
 
-@st.cache_data(show_spinner=False)
+def ensure_data_loaded() -> None:
+    if "mfmea_entries" not in st.session_state:
+        st.session_state["mfmea_entries"] = pd.DataFrame(SAMPLE_ENTRIES)
+
+
 def load_data() -> pd.DataFrame:
-    df = fetch_mfmea_rows(cfg)
-    if df.empty:
-        df = pd.DataFrame(
-            [
-                {
-                    "Machine": "Hydraulic Press",
-                    "Project": "Alpha",
-                    "Customer": "Contoso",
-                    "Analyst": "admin@example.com",
-                    "Function": "Clamp workpiece",
-                    "FailureMode": "Insufficient clamping force",
-                    "FailureEffect": "Workpiece slips",
-                    "Cause": "Hydraulic leak",
-                    "Severity": 9,
-                    "Occurrence": 5,
-                    "Detection": 4,
-                    "Prevention": "Regular seal replacement",
-                    "DetectionControls": "Pressure monitoring",
-                    "RPNGoal": 180,
-                }
-            ]
-        )
-    df["RPN"] = df[["Severity", "Occurrence", "Detection"]].product(axis=1)
+    ensure_data_loaded()
+    df = st.session_state["mfmea_entries"].copy()
+    if not df.empty:
+        df["RPN"] = df[["Severity", "Occurrence", "Detection"]].product(axis=1)
     return df
 
 
@@ -163,11 +173,10 @@ def main() -> None:
     st.sidebar.header("User")
     user_email = st.sidebar.text_input("Email", value="user@example.com")
     admin_user = is_admin(user_email)
-    allowed_projects = user_project_access(cfg, user_email) if admin_user else []
 
     st.sidebar.write("Admin access" if admin_user else "Viewer")
     st.sidebar.caption(
-        "Administrators set the RPN goal and grant edit permissions by project."
+        "Demo mode: administrators can adjust the RPN goal for visualization."
     )
 
     st.markdown("<div class='grey-panel'>", unsafe_allow_html=True)
@@ -175,7 +184,7 @@ def main() -> None:
 
     col_goal, col_info = st.columns([1, 3])
     with col_goal:
-        goal_value = df["RPNGoal"].iloc[0] if not df.empty else 180
+        goal_value = st.session_state.get("rpn_goal", df["RPNGoal"].iloc[0] if not df.empty else 180)
         if admin_user:
             goal_value = st.number_input(
                 "RPN Goal (admin only)",
@@ -183,7 +192,7 @@ def main() -> None:
                 min_value=1,
                 max_value=300,
                 step=5,
-                help="Administrators can adjust the acceptable RPN threshold.",
+                help="Administrators can adjust the acceptable RPN threshold for the demo.",
             )
         else:
             st.number_input(
@@ -191,6 +200,7 @@ def main() -> None:
                 value=int(goal_value),
                 disabled=True,
             )
+        st.session_state["rpn_goal"] = goal_value
     with col_info:
         st.write(
             "RPN goal set to 180 by default. Values above the goal are highlighted "
@@ -246,40 +256,36 @@ def main() -> None:
             unsafe_allow_html=True,
         )
 
-        submitted = st.form_submit_button("Save entry")
-
-    can_edit = admin_user or project in allowed_projects
+        submitted = st.form_submit_button("Add entry (visual only)")
 
     if submitted:
-        if not can_edit:
-            st.error(
-                "You do not have edit permissions for this project. Please contact an administrator."
-            )
+        payload: Dict[str, Any] = {
+            "Machine": machine,
+            "Project": project,
+            "Customer": customer,
+            "Analyst": analyst,
+            "Function": function,
+            "FailureMode": failure_mode,
+            "FailureEffect": failure_effect,
+            "Cause": cause,
+            "Severity": severity,
+            "Occurrence": occurrence,
+            "Detection": detection,
+            "Prevention": prevention,
+            "DetectionControls": detection_controls,
+            "RPNGoal": goal_value,
+        }
+        if not all(payload.values()):
+            st.warning("Complete all fields to add a demo entry.")
         else:
-            payload: Dict[str, Any] = {
-                "Machine": machine,
-                "Project": project,
-                "Customer": customer,
-                "Analyst": analyst,
-                "Function": function,
-                "FailureMode": failure_mode,
-                "FailureEffect": failure_effect,
-                "Cause": cause,
-                "Severity": severity,
-                "Occurrence": occurrence,
-                "Detection": detection,
-                "Prevention": prevention,
-                "DetectionControls": detection_controls,
-                "RPNGoal": goal_value,
-            }
-            ok = save_record(cfg, payload)
-            if ok:
-                st.success("Entry saved to SharePoint list.")
-                st.cache_data.clear()
-            else:
-                st.warning(
-                    "Could not persist to SharePoint. Review configuration or network connectivity."
-                )
+            st.session_state["mfmea_entries"] = pd.concat(
+                [st.session_state["mfmea_entries"], pd.DataFrame([payload])],
+                ignore_index=True,
+            )
+            st.success(
+                "Demo entry added locally. Persistence is disabled in this visualization-only version."
+            )
+            df = load_data()
 
     st.markdown("<h3 class='navy-title'>Analysis Dashboard</h3>", unsafe_allow_html=True)
     if df.empty:
